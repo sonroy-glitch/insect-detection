@@ -39,6 +39,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [selectedBox, setSelectedBox] = useState<Box | "all" | null>("all")
   const [captures, setCaptures] = useState<Capture[]>([])
   const [isLoadingCaptures, setIsLoadingCaptures] = useState(false)
+  const [isLoadingSession, setIsLoadingSession] = useState(true)
+
+  // Restore session on mount
+  useEffect(() => {
+    const restoreSession = async () => {
+      const token = typeof window !== "undefined" ? localStorage.getItem("token") : null
+      if (token) {
+        try {
+          const res = await fetch(`${API_BASE}/me`, {
+            headers: {
+              Authorization: `Bearer ${token}`
+            }
+          })
+          if (res.ok) {
+            const data = await res.json()
+            setUser({
+              id: data.id,
+              name: data.email.split("@")[0]!.replace(/[._]/g, " ").replace(/\b\w/g, (l: string) => l.toUpperCase()),
+              email: data.email,
+              accountType: data.user_type === "researcher" ? "researcher" : "personal"
+            })
+          } else {
+            localStorage.removeItem("token")
+          }
+        } catch (err) {
+          console.error("Failed to restore session:", err)
+        }
+      }
+      setIsLoadingSession(false)
+    }
+    restoreSession()
+  }, [])
 
   // Sync default selectedBox once boxes are initialized/loaded
   useEffect(() => {
@@ -50,6 +82,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refreshCaptures = async () => {
     setIsLoadingCaptures(true)
     try {
+      // 1. Fetch boxes from backend
+      let dbBoxes: any[] = []
+      try {
+        const token = typeof window !== "undefined" ? localStorage.getItem("token") : null
+        const headers: Record<string, string> = {}
+        if (token) {
+          headers["Authorization"] = `Bearer ${token}`
+        }
+        const resBoxes = await fetch(`${API_BASE}/boxes`, { headers })
+        if (resBoxes.ok) {
+          const jsonBoxes = await resBoxes.json()
+          dbBoxes = jsonBoxes.data || []
+        }
+      } catch (boxErr) {
+        console.error("Failed to fetch boxes:", boxErr)
+      }
+
+      // 2. Fetch captures
       const res = await fetch(`${API_BASE}/everything`)
       if (res.ok) {
         const json = await res.json()
@@ -70,10 +120,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
         })
 
-        // Extract unique boxes from captures database records
-        const uniqueBoxIds = Array.from(new Set(data.map((item: any) => item.box_id))) as string[]
+        // Merge initialBoxes, dbBoxes, and box_ids from captures
         setBoxes((prev) => {
           const updated = [...prev]
+
+          // Add boxes returned by the backend /boxes endpoint
+          for (const box of dbBoxes) {
+            const existsIdx = updated.findIndex((b) => b.id === box.box_id_default)
+            if (existsIdx === -1) {
+              updated.push({
+                id: box.box_id_default,
+                nickname: box.box_name || `Box ${box.box_id_default}`,
+                isOnline: true,
+                lastSync: "Just now"
+              })
+            } else {
+              // Update nickname if present
+              if (box.box_name) {
+                updated[existsIdx].nickname = box.box_name
+              }
+            }
+          }
+
+          // Add unique box_ids from captures
+          const uniqueBoxIds = Array.from(new Set(data.map((item: any) => item.box_id))) as string[]
           for (const bid of uniqueBoxIds) {
             if (!updated.some((b) => b.id === bid)) {
               updated.push({
@@ -116,6 +186,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       const data = await res.json()
       if (res.status === 200 && data.id) {
+        if (data.token) {
+          localStorage.setItem("token", data.token)
+        }
         setUser({
           id: data.id,
           name: email.split("@")[0]!.replace(/[._]/g, " ").replace(/\b\w/g, (l) => l.toUpperCase()),
@@ -149,6 +222,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       const data = await res.json()
       if (res.status === 200 && data.id) {
+        if (data.token) {
+          localStorage.setItem("token", data.token)
+        }
         setUser({
           id: data.id,
           name: userData.name || userData.email!.split("@")[0]!.replace(/[._]/g, " ").replace(/\b\w/g, (l) => l.toUpperCase()),
@@ -168,6 +244,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const signOut = () => {
+    localStorage.removeItem("token")
     setUser(null)
   }
 
@@ -194,8 +271,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       
       setBoxes((prev) => {
-        if (prev.some((b) => b.id === boxId)) return prev
-        return [...prev, newBox]
+        const updated = [...prev]
+        const idx = updated.findIndex((b) => b.id === boxId)
+        if (idx === -1) {
+          updated.push(newBox)
+        } else {
+          updated[idx].nickname = nickname
+        }
+        return updated
       })
       setSelectedBox(newBox)
       await refreshCaptures()
@@ -204,6 +287,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error(err)
       return false
     }
+  }
+
+  if (isLoadingSession) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+      </div>
+    )
   }
 
   return (

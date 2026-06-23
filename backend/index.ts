@@ -11,6 +11,7 @@ dotenv.config();
 import express from 'express';
 import type { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
+import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt'
 import cron from 'node-cron'
 import { createClient } from '@supabase/supabase-js'
@@ -41,7 +42,17 @@ app.post("/signin",async(req:Request, res:Response)=>{
         const check = await bcrypt.compare(data.password,response.password)
         console.log(check)
         if (check){
-          return res.status(200).send({"id":response.id,"user_type":response.user_type,"msg":"you are good to go "})
+          const token = jwt.sign(
+            { id: response.id, email: response.email, user_type: response.user_type },
+            process.env.JWT_SECRET || "fallback-secret",
+            { expiresIn: "7d" }
+          );
+          return res.status(200).send({
+            "id": response.id,
+            "user_type": response.user_type,
+            "token": token,
+            "msg": "you are good to go "
+          })
         }
         else{
           return res.status(202).send({"msg":"Password is incorrect"})
@@ -68,7 +79,16 @@ app.post("/signup",async(req:Request,res:Response)=>{
       }
     })
     
-    return res.status(200).send({"id":response.id,"msg":"User Creation Success"})
+    const token = jwt.sign(
+      { id: response.id, email: response.email, user_type: response.user_type },
+      process.env.JWT_SECRET || "fallback-secret",
+      { expiresIn: "7d" }
+    );
+    return res.status(200).send({
+      "id": response.id,
+      "token": token,
+      "msg": "User Creation Success"
+    })
   } catch (error) {
     return res.status(505).json({error,"msg":"Something is up with server"})
   }
@@ -77,7 +97,11 @@ app.post("/signup",async(req:Request,res:Response)=>{
 app.get("/everything",async(req:Request,res:Response)=>{
   try {
     const response= await prisma.species.findMany({})
-    return res.status(200).json({"data":response})
+    const serialized = response.map(item => ({
+      ...item,
+      taxon_id: item.taxon_id.toString()
+    }));
+    return res.status(200).json({"data":serialized})
   } catch (error) {
     return res.status(505).json({error,"msg":"Something is up with server"})
   }
@@ -86,7 +110,11 @@ app.post("/box_id",async(req:Request,res:Response)=>{
   const {box_id}=req.body;
   try {
     const response=await prisma.species.findMany({where:{box_id}})
-    return res.status(200).json({response})
+    const serialized = response.map(item => ({
+      ...item,
+      taxon_id: item.taxon_id.toString()
+    }));
+    return res.status(200).json({response: serialized})
   } catch (error) {
     return res.status(505).json({error,"msg":"Something is up with server"})
   }
@@ -330,7 +358,8 @@ async function runJob() {
 
 // ---------- Cron Scheduler ----------
 
-cron.schedule("0 */30 * * * *", () => {
+// Run the job every minute during testing/operation to process captures instantly
+cron.schedule("* * * * *", () => {
   runJob().catch((e) => console.error("[cron] uncaught:", e));
 }, {
   timezone: "Asia/Kolkata"
@@ -348,6 +377,43 @@ app.post("/jobs/run-captures", async (_req: Request, res: Response) => {
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get("/me", async (req: Request, res: Response): Promise<any> => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ msg: "No token provided" });
+  }
+  const token = authHeader.split(" ")[1]!;
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || "fallback-secret") as {
+      id: string;
+      email: string;
+      user_type: string;
+    };
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.id },
+    });
+    if (!user) {
+      return res.status(404).json({ msg: "User not found" });
+    }
+    return res.status(200).json({
+      id: user.id,
+      email: user.email,
+      user_type: user.user_type,
+    });
+  } catch (error) {
+    return res.status(401).json({ msg: "Invalid or expired token" });
+  }
+});
+
+app.get("/boxes", async (_req: Request, res: Response): Promise<any> => {
+  try {
+    const boxes = await prisma.box.findMany({});
+    return res.status(200).json({ data: boxes });
+  } catch (error) {
+    return res.status(500).json({ error, msg: "Failed to fetch boxes from server" });
   }
 });
 

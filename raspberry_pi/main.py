@@ -60,13 +60,13 @@ def main():
     sensor_queue = Queue()
 
     # ── Start sensor reader thread ──────────────────────────────────────
-    reader_thread = Thread(
-        target=sensor_loop,
-        args=(sensor_queue,),
-        name="SensorReader",
-        daemon=True,
-    )
-    reader_thread.start()
+    # reader_thread = Thread(
+    #     target=sensor_loop,
+    #     args=(sensor_queue,),
+    #     name="SensorReader",
+    #     daemon=True,
+    # )
+    # reader_thread.start()
     logger.info("Sensor reader thread started.")
 
     # ── Start uploader thread ───────────────────────────────────────────
