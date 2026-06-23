@@ -359,7 +359,7 @@ async function runJob() {
 // ---------- Cron Scheduler ----------
 
 // Run the job every minute during testing/operation to process captures instantly
-cron.schedule("* * * * *", () => {
+cron.schedule("*/15 * * * *", () => {
   runJob().catch((e) => console.error("[cron] uncaught:", e));
 }, {
   timezone: "Asia/Kolkata"
