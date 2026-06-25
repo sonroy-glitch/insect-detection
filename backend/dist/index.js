@@ -296,7 +296,7 @@ async function runJob() {
 }
 // ---------- Cron Scheduler ----------
 // Run the job every minute during testing/operation to process captures instantly
-cron.schedule("* * * * *", () => {
+cron.schedule("*/15 * * * *", () => {
     runJob().catch((e) => console.error("[cron] uncaught:", e));
 }, {
     timezone: "Asia/Kolkata"
@@ -304,6 +304,82 @@ cron.schedule("* * * * *", () => {
 // ---------- Routes ----------
 app.get("/health", (_req, res) => {
     res.json({ ok: true });
+});
+app.post("/insights", async (req, res) => {
+    const { box_id } = req.body;
+    try {
+        const whereClause = (box_id && box_id !== "all") ? { box_id } : {};
+        const speciesList = await prisma.species.findMany({
+            where: whereClause,
+        });
+        const counts = {};
+        for (const item of speciesList) {
+            counts[item.name] = (counts[item.name] || 0) + 1;
+        }
+        const speciesSummary = Object.entries(counts)
+            .map(([name, count]) => `${name}: ${count} capture(s)`)
+            .join(", ");
+        const systemPrompt = `You are an ecological analysis expert. Analyze the insect species captured by an automated monitoring box.
+Based on the list of captured species and their counts, generate an ecological summary and indicators.
+
+You MUST respond with a JSON object matching this schema exactly:
+{
+  "summary": "A cohesive, engaging paragraph (80-120 words) explaining what these specific captures (and their abundance) indicate about the local ecosystem, habitat health, pollinator presence, light pollution, etc. Do not mention HTML or markdown.",
+  "badges": [
+    { "label": "Short status indicator (e.g. 'Pollinator Activity — Healthy')", "status": "healthy" | "warning" | "moderate" }
+  ], // Provide exactly 3 badges
+  "indicators": [
+    {
+      "icon": "Leaf" | "Lightbulb" | "Bug" | "Droplets" | "Sprout" | "Flower2",
+      "title": "Category Title (e.g. 'Nocturnal Pollinators')",
+      "detected": "List of relevant detected species from the data (e.g. 'Luna Moth, Garden Tiger Moth')",
+      "meaning": "Brief explanation of what their presence indicates for this specific category",
+      "status": "healthy" | "moderate" | "warning"
+    }
+  ] // Provide 4 to 6 relevant ecological indicators based on the detected species.
+}
+
+If no species are detected, generate a friendly summary encouraging the user to keep the box online for nightly captures, and set appropriate placeholder badges/indicators.
+
+Return ONLY the raw JSON object. Do not wrap in markdown blocks or include any conversational intro/outro.`;
+        const userMessage = speciesList.length > 0
+            ? `Here are the captured species for Box ${box_id || "All"}:\n${speciesSummary}`
+            : `No species have been detected yet for Box ${box_id || "All"}.`;
+        const completion = await client.chat.completions.create({
+            model: "llama-3.3-70b-versatile",
+            messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: userMessage }
+            ],
+            response_format: { type: "json_object" },
+            temperature: 0.7,
+        });
+        const resultText = completion.choices[0]?.message?.content || "{}";
+        const resultJson = JSON.parse(resultText);
+        return res.status(200).json(resultJson);
+    }
+    catch (error) {
+        console.error("Failed to generate LLM insights:", error);
+        // Fallback response matching the schema
+        const fallback = {
+            summary: "Gathering species data to analyze the local ecosystem. Check back soon for detailed insights on your nocturnal pollinators and habitat health.",
+            badges: [
+                { label: "Pollinator Activity — Unknown", status: "moderate" },
+                { label: "Habitat Quality — Unknown", status: "moderate" },
+                { label: "Light Pollution — Unknown", status: "moderate" }
+            ],
+            indicators: [
+                {
+                    icon: "Leaf",
+                    title: "Nocturnal Pollinators",
+                    detected: "None",
+                    meaning: "Awaiting species data to determine pollinator status",
+                    status: "moderate"
+                }
+            ]
+        };
+        return res.status(200).json(fallback);
+    }
 });
 app.post("/jobs/run-captures", async (_req, res) => {
     try {

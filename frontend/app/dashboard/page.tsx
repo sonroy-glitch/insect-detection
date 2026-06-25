@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import { Clock, ArrowRight, Leaf, Lightbulb, Bug, Droplets, Sprout, Flower2 } from "lucide-react"
 import { Navigation } from "@/components/navigation"
@@ -10,7 +10,6 @@ import { ConnectBoxModal } from "@/components/connect-box-modal"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useAuth } from "@/lib/auth-context"
-import { ecologicalIndicators } from "@/lib/mock-data"
 import { cn } from "@/lib/utils"
 
 const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -22,10 +21,24 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   Flower2,
 }
 
+interface DashboardInsights {
+  summary: string;
+  badges: Array<{ label: string; status: "healthy" | "warning" | "moderate" | "danger" }>;
+  indicators: Array<{
+    icon: string;
+    title: string;
+    detected: string;
+    meaning: string;
+    status: "healthy" | "warning" | "moderate" | "danger";
+  }>;
+}
+
 export default function DashboardPage() {
   const { user, boxes, selectedBox, captures } = useAuth()
   const [connectModalOpen, setConnectModalOpen] = useState(false)
   const { open: openChat } = useChatbot()
+  const [insights, setInsights] = useState<DashboardInsights | null>(null)
+  const [isLoadingInsights, setIsLoadingInsights] = useState(false)
 
   const hasBoxes = boxes.length > 0
   const currentBox = selectedBox === "all" ? null : selectedBox
@@ -35,6 +48,43 @@ export default function DashboardPage() {
   const filteredCaptures = selectedBox === "all" 
     ? captures 
     : captures.filter((c) => c.boxId === currentBox?.id)
+
+  useEffect(() => {
+    if (!hasBoxes) return
+
+    let isMounted = true
+    const fetchInsights = async () => {
+      setIsLoadingInsights(true)
+      try {
+        const boxId = selectedBox === "all" ? "all" : currentBox?.id
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000"}/insights`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ box_id: boxId }),
+        })
+        if (res.ok) {
+          const data = await res.json()
+          if (isMounted) {
+            setInsights(data)
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch insights:", err)
+      } finally {
+        if (isMounted) {
+          setIsLoadingInsights(false)
+        }
+      }
+    }
+
+    fetchInsights()
+
+    return () => {
+      isMounted = false
+    }
+  }, [selectedBox, captures, hasBoxes, currentBox])
 
   const handleAskAbout = (speciesName: string) => {
     openChat(`Tell me about ${speciesName}`)
@@ -94,28 +144,54 @@ export default function DashboardPage() {
                   <CardTitle className="text-foreground">What your box is telling you</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <p className="text-muted-foreground mb-6 text-pretty">
-                    High moth activity recorded across both sites over the past week — 
-                    particularly Luna Moths and Garden Tiger Moths — indicating strong 
-                    nocturnal pollinator presence and a diverse native plant understorey. 
-                    Firefly sightings at River meadow plot suggest low light pollution 
-                    and healthy grassland habitat. Green Lacewing captures at Back garden 
-                    point to active natural pest control in the area.
-                  </p>
-                  <div className="flex flex-wrap gap-3">
-                    <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm bg-success/10 text-success">
-                      <span className="h-2 w-2 rounded-full bg-success" />
-                      Pollinator Activity — Healthy
-                    </span>
-                    <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm bg-success/10 text-success">
-                      <span className="h-2 w-2 rounded-full bg-success" />
-                      Habitat Quality — Good
-                    </span>
-                    <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm bg-warning/10 text-warning">
-                      <span className="h-2 w-2 rounded-full bg-warning" />
-                      Light Pollution — Moderate
-                    </span>
-                  </div>
+                  {isLoadingInsights || !insights ? (
+                    <div className="animate-pulse space-y-4">
+                      <div className="h-4 bg-muted rounded w-full"></div>
+                      <div className="h-4 bg-muted rounded w-11/12"></div>
+                      <div className="h-4 bg-muted rounded w-4/5"></div>
+                      <div className="flex flex-wrap gap-3 pt-2">
+                        <div className="h-8 bg-muted rounded-full w-28"></div>
+                        <div className="h-8 bg-muted rounded-full w-32"></div>
+                        <div className="h-8 bg-muted rounded-full w-24"></div>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <p className="text-muted-foreground mb-6 text-pretty">
+                        {insights.summary}
+                      </p>
+                      <div className="flex flex-wrap gap-3">
+                        {insights.badges?.map((badge, idx) => {
+                          const isSuccess = badge.status === "healthy";
+                          const isWarning = badge.status === "warning" || badge.status === "danger";
+                          const isModerate = badge.status === "moderate";
+                          return (
+                            <span
+                              key={idx}
+                              className={cn(
+                                "inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm",
+                                isSuccess && "bg-success/10 text-success",
+                                isWarning && "bg-destructive/10 text-destructive",
+                                isModerate && "bg-warning/10 text-warning",
+                                !isSuccess && !isWarning && !isModerate && "bg-muted text-muted-foreground"
+                              )}
+                            >
+                              <span
+                                className={cn(
+                                  "h-2 w-2 rounded-full",
+                                  isSuccess && "bg-success",
+                                  isWarning && "bg-destructive",
+                                  isModerate && "bg-warning",
+                                  !isSuccess && !isWarning && !isModerate && "bg-muted-foreground"
+                                )}
+                              />
+                              {badge.label}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
                 </CardContent>
               </Card>
             )}
@@ -193,40 +269,63 @@ export default function DashboardPage() {
                   What your captures indicate
                 </h2>
                 <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {ecologicalIndicators.map((indicator, index) => {
-                    const IconComponent = iconMap[indicator.icon] || Leaf
-                    return (
-                      <Card 
-                        key={indicator.title} 
-                        className={`bg-card border-border shadow-soft animate-slide-up opacity-0 stagger-${index + 1}`}
-                      >
+                  {isLoadingInsights || !insights ? (
+                    Array.from({ length: 3 }).map((_, idx) => (
+                      <Card key={idx} className="bg-card border-border shadow-soft animate-pulse">
                         <CardContent className="p-4">
                           <div className="flex items-start gap-3">
-                            <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                              <IconComponent className="h-5 w-5 text-primary" />
-                            </div>
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2 mb-1">
-                                <h3 className="font-semibold text-foreground text-sm">
-                                  {indicator.title}
-                                </h3>
-                                <span className={cn(
-                                  "h-2 w-2 rounded-full",
-                                  indicator.status === "healthy" ? "bg-success" : "bg-warning"
-                                )} />
-                              </div>
-                              <p className="text-xs text-muted-foreground mb-1">
-                                Detected: {indicator.detected}
-                              </p>
-                              <p className="text-xs text-muted-foreground">
-                                {indicator.meaning}
-                              </p>
+                            <div className="h-10 w-10 rounded-full bg-muted flex-shrink-0" />
+                            <div className="flex-1 space-y-2">
+                              <div className="h-4 bg-muted rounded w-1/2" />
+                              <div className="h-3 bg-muted rounded w-3/4" />
+                              <div className="h-3 bg-muted rounded w-5/6" />
                             </div>
                           </div>
                         </CardContent>
                       </Card>
-                    )
-                  })}
+                    ))
+                  ) : (
+                    insights.indicators?.map((indicator, index) => {
+                      const IconComponent = iconMap[indicator.icon] || Leaf
+                      const isSuccess = indicator.status === "healthy";
+                      const isWarning = indicator.status === "warning" || indicator.status === "danger";
+                      const isModerate = indicator.status === "moderate";
+                      return (
+                        <Card 
+                          key={indicator.title} 
+                          className={`bg-card border-border shadow-soft animate-slide-up opacity-0 stagger-${index + 1}`}
+                        >
+                          <CardContent className="p-4">
+                            <div className="flex items-start gap-3">
+                              <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
+                                <IconComponent className="h-5 w-5 text-primary" />
+                              </div>
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <h3 className="font-semibold text-foreground text-sm">
+                                    {indicator.title}
+                                  </h3>
+                                  <span className={cn(
+                                    "h-2 w-2 rounded-full",
+                                    isSuccess && "bg-success",
+                                    isWarning && "bg-destructive",
+                                    isModerate && "bg-warning",
+                                    !isSuccess && !isWarning && !isModerate && "bg-muted-foreground"
+                                  )} />
+                                </div>
+                                <p className="text-xs text-muted-foreground mb-1">
+                                  Detected: {indicator.detected}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  {indicator.meaning}
+                                </p>
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      )
+                    })
+                  )}
                 </div>
               </section>
             )}
